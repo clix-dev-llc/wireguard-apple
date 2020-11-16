@@ -23,18 +23,6 @@ open class WireGuardPacketTunnelProvider: NEPacketTunnelProvider {
         dispatchQueue.async {
             self.activationAttemptId = options?[Self.activationAttemptIdentifierOptionsKey] as? String
 
-            // Read tunnel configuration
-            let tunnelConfiguration: TunnelConfiguration
-            do {
-                tunnelConfiguration = try self.makeTunnelConfiguration()
-            } catch let error as WireGuardPacketTunnelProviderError {
-                self.handleTunnelError(error)
-                startTunnelCompletionHandler(error)
-                return
-            } catch {
-                fatalError()
-            }
-
             // Configure WireGuard logger
             self.configureLogger()
             #if os(macOS)
@@ -43,26 +31,12 @@ open class WireGuardPacketTunnelProvider: NEPacketTunnelProvider {
 
             self.logLine(level: .info, message: "Starting tunnel from the " + (self.activationAttemptId == nil ? "OS directly, rather than the app" : "app"))
 
-            // Resolve peers
-            let endpoints = tunnelConfiguration.peers.map { $0.endpoint }
-            guard let resolvedEndpoints = DNSResolver.resolveSync(endpoints: endpoints) else {
-                let error = WireGuardPacketTunnelProviderError.dnsResolution
-                self.handleTunnelError(error)
-                startTunnelCompletionHandler(error)
-                return
-            }
-            assert(endpoints.count == resolvedEndpoints.count)
-
-            self.packetTunnelSettingsGenerator = PacketTunnelSettingsGenerator(tunnelConfiguration: tunnelConfiguration, resolvedEndpoints: resolvedEndpoints)
-
-            self.setTunnelNetworkSettings(self.packetTunnelSettingsGenerator!.generateNetworkSettings()) { error in
+            self.loadTunnelConfigurationAndSetNetworkSettings { error in
                 self.dispatchQueue.async {
                     if let error = error {
-                        self.logLine(level: .error, message: "Starting tunnel failed with setTunnelNetworkSettings returning \(error.localizedDescription)")
-
-                        let tunnelError = WireGuardPacketTunnelProviderError.setNetworkSettings(error)
-                        self.handleTunnelError(tunnelError)
-                        startTunnelCompletionHandler(tunnelError)
+                        self.logLine(level: .error, message: "Starting tunnel failed: \(error.localizedDescription)")
+                        self.handleTunnelError(error)
+                        startTunnelCompletionHandler(error)
                     } else {
                         self.networkMonitor = NWPathMonitor()
                         self.networkMonitor!.pathUpdateHandler = { [weak self] path in
@@ -184,40 +158,15 @@ open class WireGuardPacketTunnelProvider: NEPacketTunnelProvider {
             // This will broadcast the `NEVPNStatusDidChange` notification to the GUI process.
             self.reasserting = true
 
-            // Read tunnel configuration
-            let tunnelConfiguration: TunnelConfiguration
-            do {
-                tunnelConfiguration = try self.makeTunnelConfiguration()
-            } catch let error as WireGuardPacketTunnelProviderError {
-                finishReasserting(error)
-                return
-            } catch {
-                fatalError()
-            }
-
-            // Resolve peers
-            let endpoints = tunnelConfiguration.peers.map { $0.endpoint }
-            guard let resolvedEndpoints = DNSResolver.resolveSync(endpoints: endpoints) else {
-                finishReasserting(.dnsResolution)
-                return
-            }
-            assert(endpoints.count == resolvedEndpoints.count)
-
-            let settingsGenerator = PacketTunnelSettingsGenerator(
-                tunnelConfiguration: tunnelConfiguration,
-                resolvedEndpoints: resolvedEndpoints
-            )
-            self.packetTunnelSettingsGenerator = settingsGenerator
-
-            self.setTunnelNetworkSettings(settingsGenerator.generateNetworkSettings()) { error in
+            self.loadTunnelConfigurationAndSetNetworkSettings { error in
                 self.dispatchQueue.async {
                     if let error = error {
-                        self.logLine(level: .error, message: "Reloading tunnel failed with setTunnelNetworkSettings returning \(error.localizedDescription)")
-
-                        finishReasserting(.setNetworkSettings(error))
+                        self.logLine(level: .error, message: "Reloading tunnel failed: \(error.localizedDescription)")
+                        self.handleTunnelError(error)
+                        finishReasserting(error)
                     } else {
                         if let handle = self.handle {
-                            _ = settingsGenerator.uapiConfiguration()
+                            _ = self.packetTunnelSettingsGenerator?.uapiConfiguration()
                                 .withCString { wgSetConfig(handle, $0) }
                         }
                         finishReasserting(nil)
@@ -243,6 +192,34 @@ open class WireGuardPacketTunnelProvider: NEPacketTunnelProvider {
             return try self.getTunnelConfiguration(from: tunnelProviderProtocol)
         } catch {
             throw WireGuardPacketTunnelProviderError.loadTunnelConfiguration(error)
+        }
+    }
+
+    private func loadTunnelConfigurationAndSetNetworkSettings(completionHandler: @escaping (WireGuardPacketTunnelProviderError?) -> Void) {
+        // Read tunnel configuration
+        let tunnelConfiguration: TunnelConfiguration
+        do {
+            tunnelConfiguration = try self.makeTunnelConfiguration()
+        } catch let error as WireGuardPacketTunnelProviderError {
+            completionHandler(error)
+            return
+        } catch {
+            fatalError()
+        }
+
+        // Resolve peers
+        let endpoints = tunnelConfiguration.peers.map { $0.endpoint }
+        guard let resolvedEndpoints = DNSResolver.resolveSync(endpoints: endpoints) else {
+            completionHandler(.dnsResolution)
+            return
+        }
+        assert(endpoints.count == resolvedEndpoints.count)
+
+        self.packetTunnelSettingsGenerator = PacketTunnelSettingsGenerator(tunnelConfiguration: tunnelConfiguration, resolvedEndpoints: resolvedEndpoints)
+
+        let networkSettings = self.packetTunnelSettingsGenerator!.generateNetworkSettings()
+        self.setTunnelNetworkSettings(networkSettings) { (error) in
+            completionHandler(error.flatMap { .setNetworkSettings($0) })
         }
     }
 
