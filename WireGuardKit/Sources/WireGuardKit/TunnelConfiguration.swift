@@ -4,8 +4,6 @@
 import Foundation
 
 public final class TunnelConfiguration {
-    public static let keyLength = 32
-
     public var name: String?
     public var interface: InterfaceConfiguration
     public let peers: [PeerConfiguration]

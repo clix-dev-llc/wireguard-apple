@@ -6,7 +6,7 @@
         "repositoryURL": "https://git.zx2c4.com/wireguard-apple",
         "state": {
           "branch": "am/swiftpm",
-          "revision": "9cbd0aa4f90ad80bcb0e527bf046090493735ddd",
+          "revision": "8028a9bdf8bcb137ed5ab33727114f6fad55261c",
           "version": null
         }
       }
