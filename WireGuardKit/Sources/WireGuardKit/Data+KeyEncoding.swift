@@ -5,7 +5,7 @@ import Foundation
 import WireGuardKitCTarget
 
 extension Data {
-    public init?(hexKey hexString: String) {
+    init?(hexKey hexString: String) {
         var bytes = [UInt8](repeating: 0, count: Int(WG_KEY_LEN))
         if key_from_hex(&bytes, hexString) {
             self.init(bytes)
@@ -14,7 +14,7 @@ extension Data {
         }
     }
 
-    public init?(base64Key base64String: String) {
+    init?(base64Key base64String: String) {
         var bytes = [UInt8](repeating: 0, count: Int(WG_KEY_LEN))
         if key_from_base64(&bytes, base64String) {
             self.init(bytes)
@@ -23,7 +23,7 @@ extension Data {
         }
     }
 
-    public func hexKey() -> String? {
+    func hexKey() -> String? {
         guard self.count == WG_KEY_LEN else {
             return nil
         }
@@ -38,7 +38,7 @@ extension Data {
         }
     }
 
-    public func base64Key() -> String? {
+    func base64Key() -> String? {
         guard self.count == WG_KEY_LEN else {
             return nil
         }
