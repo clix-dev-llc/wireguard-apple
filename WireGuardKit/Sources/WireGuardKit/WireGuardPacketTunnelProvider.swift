@@ -112,10 +112,6 @@ open class WireGuardPacketTunnelProvider: NEPacketTunnelProvider {
         throw SubclassRequirementError()
     }
 
-    open func tunnelWillReconnect() {
-        // Implement in subclasses
-    }
-
     // MARK: - Public
 
     public func getWireGuardConfiguration(completionHandler: @escaping (String?) -> Void) {
@@ -136,22 +132,7 @@ open class WireGuardPacketTunnelProvider: NEPacketTunnelProvider {
 
     public func reloadTunnelConfiguration(completionHandler: @escaping (WireGuardPacketTunnelProviderError?) -> Void) {
         self.dispatchQueue.async {
-            self.logLine(level: .info, message: "Reload tunnel configuration")
-
-            let finishReasserting = { (_ error: WireGuardPacketTunnelProviderError?) in
-                // Tell the system that the tunnel has finished reconnecting.
-                self.reasserting = false
-
-                if let error = error {
-                    self.handleTunnelError(error)
-                }
-                completionHandler(error)
-            }
-
-            // Let the subclass set up internal data structures before raising the `reasserting`
-            // flag in order for GUI process to be able to fetch the new data via IPC call in
-            // response to `NEVPNStatusDidChange` notification.
-            self.tunnelWillReconnect()
+            self.logLine(level: .info, message: "Reloading tunnel configuration")
 
             // Tell the system that the tunnel is going to reconnect using new WireGuard
             // configuration.
@@ -163,14 +144,17 @@ open class WireGuardPacketTunnelProvider: NEPacketTunnelProvider {
                     if let error = error {
                         self.logLine(level: .error, message: "Reloading tunnel failed: \(error.localizedDescription)")
                         self.handleTunnelError(error)
-                        finishReasserting(error)
                     } else {
                         if let handle = self.handle {
                             _ = self.packetTunnelSettingsGenerator?.uapiConfiguration()
                                 .withCString { wgSetConfig(handle, $0) }
                         }
-                        finishReasserting(nil)
                     }
+
+                    // Tell the system that the tunnel has finished reconnecting.
+                    self.reasserting = false
+
+                    completionHandler(error)
                 }
             }
         }
