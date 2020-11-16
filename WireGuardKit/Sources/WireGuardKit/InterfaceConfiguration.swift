@@ -5,20 +5,13 @@ import Foundation
 import Network
 
 public struct InterfaceConfiguration {
-    public var privateKey: Data
+    public var privateKey: PrivateKey
     public var addresses = [IPAddressRange]()
     public var listenPort: UInt16?
     public var mtu: UInt16?
     public var dns = [DNSServer]()
 
-    public var publicKey: Data? {
-        return Curve25519.generatePublicKey(fromPrivateKey: privateKey)
-    }
-
-    public init(privateKey: Data) {
-        if privateKey.count != TunnelConfiguration.keyLength {
-            fatalError("Invalid private key")
-        }
+    public init(privateKey: PrivateKey) {
         self.privateKey = privateKey
     }
 }

@@ -5,19 +5,33 @@ import Foundation
 import WireGuardKitCTarget
 
 /// A struct representing the private key used by WireGuard
-public struct PrivateKey: StringKeyCoding, RawRepresentable, Equatable {
+public struct PrivateKey: StringKeyCoding, RawRepresentable, Equatable, Hashable {
     /// Raw private key representation
     public let rawValue: Data
 
     /// Derived public key
     public var publicKey: PublicKey {
-        let publicKeyBytes = Curve25519.generatePublicKey(fromPrivateKey: rawValue)!
-        return PublicKey(rawValue: publicKeyBytes)!
+        return rawValue.withUnsafeBytes { (privateKeyBufferPointer: UnsafeRawBufferPointer) -> PublicKey in
+            var publicKeyData = Data(repeating: 0, count: Int(WG_KEY_LEN))
+            let privateKeyBytes = privateKeyBufferPointer.baseAddress!.assumingMemoryBound(to: UInt8.self)
+
+            publicKeyData.withUnsafeMutableBytes { (publicKeyBufferPointer: UnsafeMutableRawBufferPointer) in
+                let publicKeyBytes = publicKeyBufferPointer.baseAddress!.assumingMemoryBound(to: UInt8.self)
+                curve25519_derive_public_key(publicKeyBytes, privateKeyBytes)
+            }
+
+            return PublicKey(rawValue: publicKeyData)!
+        }
     }
 
     /// Initialize new private key
     public init() {
-        rawValue = Curve25519.generatePrivateKey()
+        var bytes = Data(repeating: 0, count: Int(WG_KEY_LEN))
+        bytes.withUnsafeMutableBytes { (rawBufferPointer: UnsafeMutableRawBufferPointer) in
+            let dataPointer = rawBufferPointer.baseAddress!.assumingMemoryBound(to: UInt8.self)
+            curve25519_generate_private_key(dataPointer)
+        }
+        rawValue = bytes
     }
 
     /// Initialize private key with existing raw representation
@@ -31,7 +45,7 @@ public struct PrivateKey: StringKeyCoding, RawRepresentable, Equatable {
 }
 
 /// A struct representing a public key used by WireGuard
-public struct PublicKey: StringKeyCoding, RawRepresentable, Equatable {
+public struct PublicKey: StringKeyCoding, RawRepresentable, Equatable, Hashable {
     /// Raw public key representation
     public let rawValue: Data
 
@@ -46,7 +60,7 @@ public struct PublicKey: StringKeyCoding, RawRepresentable, Equatable {
 }
 
 /// A struct representing a pre-shared key used by WireGuard
-public struct PreSharedKey: StringKeyCoding, RawRepresentable, Equatable {
+public struct PreSharedKey: StringKeyCoding, RawRepresentable, Equatable, Hashable {
     /// Raw public key representation
     public let rawValue: Data
 
