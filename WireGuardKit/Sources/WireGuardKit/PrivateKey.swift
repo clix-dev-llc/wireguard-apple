@@ -26,12 +26,12 @@ public struct PrivateKey: StringKeyCoding, RawRepresentable, Equatable, Hashable
 
     /// Initialize new private key
     public init() {
-        var bytes = Data(repeating: 0, count: Int(WG_KEY_LEN))
-        bytes.withUnsafeMutableBytes { (rawBufferPointer: UnsafeMutableRawBufferPointer) in
-            let dataPointer = rawBufferPointer.baseAddress!.assumingMemoryBound(to: UInt8.self)
-            curve25519_generate_private_key(dataPointer)
+        var privateKeyData = Data(repeating: 0, count: Int(WG_KEY_LEN))
+        privateKeyData.withUnsafeMutableBytes { (rawBufferPointer: UnsafeMutableRawBufferPointer) in
+            let privateKeyBytes = rawBufferPointer.baseAddress!.assumingMemoryBound(to: UInt8.self)
+            curve25519_generate_private_key(privateKeyBytes)
         }
-        rawValue = bytes
+        rawValue = privateKeyData
     }
 
     /// Initialize private key with existing raw representation
@@ -94,17 +94,31 @@ public protocol StringKeyCoding: RawRepresentable where RawValue == Data {
 extension StringKeyCoding {
     /// Hex encoded representation
     public var hexKey: String {
-        return rawValue.hexKey()!
+        return rawValue.withUnsafeBytes { (rawBufferPointer: UnsafeRawBufferPointer) -> String in
+            let inBytes = rawBufferPointer.baseAddress!.assumingMemoryBound(to: UInt8.self)
+            var outBytes = [CChar](repeating: 0, count: Int(WG_KEY_LEN_HEX))
+            key_to_hex(&outBytes, inBytes)
+            return String(cString: outBytes, encoding: .ascii)!
+        }
     }
 
     /// Base64 encoded representation
     public var base64Key: String {
-        return rawValue.base64Key()!
+        return rawValue.withUnsafeBytes { (rawBufferPointer: UnsafeRawBufferPointer) -> String in
+            let inBytes = rawBufferPointer.baseAddress!.assumingMemoryBound(to: UInt8.self)
+            var outBytes = [CChar](repeating: 0, count: Int(WG_KEY_LEN_BASE64))
+            key_to_base64(&outBytes, inBytes)
+            return String(cString: outBytes, encoding: .ascii)!
+        }
     }
 
     /// Initialize private key with hex representation
     public init?(hexKey: String) {
-        if let bytes = Data(hexKey: hexKey) {
+        var bytes = Data(repeating: 0, count: Int(WG_KEY_LEN))
+        let success = bytes.withUnsafeMutableBytes { (bufferPointer: UnsafeMutableRawBufferPointer) -> Bool in
+            return key_from_hex(bufferPointer.baseAddress!.assumingMemoryBound(to: UInt8.self), hexKey)
+        }
+        if success {
             self.init(rawValue: bytes)
         } else {
             return nil
@@ -113,7 +127,11 @@ extension StringKeyCoding {
 
     /// Initialize private key with base64 representation
     public init?(base64Key: String) {
-        if let bytes = Data(base64Key: base64Key) {
+        var bytes = Data(repeating: 0, count: Int(WG_KEY_LEN))
+        let success = bytes.withUnsafeMutableBytes { (bufferPointer: UnsafeMutableRawBufferPointer) -> Bool in
+            return key_from_base64(bufferPointer.baseAddress!.assumingMemoryBound(to: UInt8.self), base64Key)
+        }
+        if success {
             self.init(rawValue: bytes)
         } else {
             return nil
