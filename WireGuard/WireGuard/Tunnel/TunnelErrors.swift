@@ -68,7 +68,7 @@ enum TunnelsManagerActivationError: WireGuardAppError {
 extension WireGuardPacketTunnelProviderError: WireGuardAppError {
     var alertText: AlertText {
         switch self {
-        case .missingProtocolConfiguration, .parseTunnelConfiguration:
+        case .missingProtocolConfiguration, .loadTunnelConfiguration:
             return (tr("alertTunnelActivationFailureTitle"), tr("alertTunnelActivationSavedConfigFailureMessage"))
         case .dnsResolution:
             return (tr("alertTunnelDNSFailureTitle"), tr("alertTunnelDNSFailureMessage"))

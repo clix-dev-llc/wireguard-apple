@@ -242,7 +242,7 @@ open class WireGuardPacketTunnelProvider: NEPacketTunnelProvider {
         do {
             return try self.getTunnelConfiguration(from: tunnelProviderProtocol)
         } catch {
-            throw WireGuardPacketTunnelProviderError.parseTunnelConfiguration(error)
+            throw WireGuardPacketTunnelProviderError.loadTunnelConfiguration(error)
         }
     }
 
@@ -305,7 +305,7 @@ public enum WireGuardPacketTunnelProviderError: LocalizedError {
     case missingProtocolConfiguration
 
     /// Failure to parse tunnel configuration.
-    case parseTunnelConfiguration(Error)
+    case loadTunnelConfiguration(Error)
 
     /// A failure to resolve endpoints DNS.
     case dnsResolution
@@ -324,8 +324,8 @@ public enum WireGuardPacketTunnelProviderError: LocalizedError {
         case .missingProtocolConfiguration:
             return "Missing protocol configuration"
 
-        case .parseTunnelConfiguration(let error):
-            return "Failure to parse tunnel configuration: \(error.localizedDescription)"
+        case .loadTunnelConfiguration(let error):
+            return "Failure to load tunnel configuration: \(error.localizedDescription)"
 
         case .dnsResolution:
             return "Failure to resolve endpoints DNS"
