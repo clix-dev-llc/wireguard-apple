@@ -14,6 +14,8 @@ open class WireGuardPacketTunnelProvider: NEPacketTunnelProvider {
 
     private let dispatchQueue = DispatchQueue(label: "PacketTunnel", qos: .utility)
     private var handle: Int32?
+    private var isPathSatisfied = false
+    private var isStarted = false
     private var networkMonitor: NWPathMonitor?
     private var packetTunnelSettingsGenerator: PacketTunnelSettingsGenerator?
 
@@ -68,6 +70,8 @@ open class WireGuardPacketTunnelProvider: NEPacketTunnelProvider {
                             return
                         }
                         self.handle = handle
+                        self.isStarted = true
+                        self.isPathSatisfied = true
 
                         startTunnelCompletionHandler(nil)
                     }
@@ -246,17 +250,60 @@ open class WireGuardPacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func pathUpdate(path: Network.NWPath) {
-        guard let handle = handle else { return }
+        guard self.isStarted else { return }
 
         self.logLine(level: .debug, message: "Network change detected with \(path.status) route and interface order \(path.availableInterfaces)")
 
         #if os(iOS)
-        if let packetTunnelSettingsGenerator = packetTunnelSettingsGenerator {
-            _ = packetTunnelSettingsGenerator.endpointUapiConfiguration()
-                .withCString { return wgSetConfig(handle, $0) }
+        let oldPathSatisfied = self.isPathSatisfied
+        let newPathSatisfied = path.status.isSatisfiable
+
+        self.isPathSatisfied = newPathSatisfied
+
+        switch (oldPathSatisfied, newPathSatisfied)  {
+        case (true, false):
+            if let handle = self.handle {
+                self.logLine(level: .info, message: "Stop wireguard backend")
+
+                wgTurnOff(handle)
+                self.handle = nil
+            }
+
+        case (false, true), (true, true):
+            guard let packetTunnelSettingsGenerator = self.packetTunnelSettingsGenerator else { return }
+
+            if let handle = self.handle {
+                wgSetConfig(handle, packetTunnelSettingsGenerator.endpointUapiConfiguration())
+                wgBumpSockets(handle)
+            } else {
+                self.logLine(level: .info, message: "Start wireguard backend")
+
+                let fileDescriptor = (self.packetFlow.value(forKeyPath: "socket.fileDescriptor") as? Int32) ?? -1
+                if fileDescriptor < 0 {
+                    self.logLine(level: .error, message: "Starting tunnel failed: Could not determine file descriptor")
+                    self.handleTunnelError(.tunnelDeviceFileDescriptor)
+                } else {
+                    let settings = packetTunnelSettingsGenerator.uapiConfiguration()
+                    let handle = wgTurnOn(packetTunnelSettingsGenerator.endpointUapiConfiguration(), fileDescriptor)
+
+                    if handle < 0 {
+                        self.logLine(level: .error, message: "Starting tunnel failed with wgTurnOn returning \(handle)")
+                        self.handleTunnelError(.startWireGuardBackend)
+                    } else {
+                        self.handle = handle
+                    }
+                }
+            }
+
+        case (false, false):
+            // No-op: device remains offline
+            break
+        }
+        #else
+        if let handle = self.handle {
+            wgBumpSockets(handle)
         }
         #endif
-        wgBumpSockets(handle)
     }
 }
 
@@ -315,4 +362,18 @@ public enum PacketTunnelLogLevel: Int32 {
     case debug = 0
     case info = 1
     case error = 2
+}
+
+private extension Network.NWPath.Status {
+    /// Returns `true` if the path is potentially satisfiable
+    var isSatisfiable: Bool {
+        switch self {
+        case .requiresConnection, .satisfied:
+            return true
+        case .unsatisfied:
+            return false
+        @unknown default:
+            return true
+        }
+    }
 }
