@@ -42,6 +42,10 @@ public struct PrivateKey: StringKeyCoding, RawRepresentable, Equatable, Hashable
             return nil
         }
     }
+
+    public static func == (lhs: PrivateKey, rhs: PrivateKey) -> Bool {
+        return compareKeys(lhs, rhs)
+    }
 }
 
 /// A struct representing a public key used by WireGuard
@@ -57,6 +61,10 @@ public struct PublicKey: StringKeyCoding, RawRepresentable, Equatable, Hashable 
             return nil
         }
     }
+
+    public static func == (lhs: PublicKey, rhs: PublicKey) -> Bool {
+        return compareKeys(lhs, rhs)
+    }
 }
 
 /// A struct representing a pre-shared key used by WireGuard
@@ -71,6 +79,10 @@ public struct PreSharedKey: StringKeyCoding, RawRepresentable, Equatable, Hashab
         } else {
             return nil
         }
+    }
+
+    public static func == (lhs: PreSharedKey, rhs: PreSharedKey) -> Bool {
+        return compareKeys(lhs, rhs)
     }
 }
 
@@ -135,6 +147,17 @@ extension StringKeyCoding {
             self.init(rawValue: bytes)
         } else {
             return nil
+        }
+    }
+}
+
+private func compareKeys<T>(_ lhs: T, _ rhs: T) -> Bool where T: RawRepresentable, T.RawValue == Data {
+    return lhs.rawValue.withUnsafeBytes { (lhsBytes: UnsafeRawBufferPointer) -> Bool in
+        return rhs.rawValue.withUnsafeBytes { (rhsBytes: UnsafeRawBufferPointer) -> Bool in
+            return key_eq(
+                lhsBytes.baseAddress!.assumingMemoryBound(to: UInt8.self),
+                rhsBytes.baseAddress!.assumingMemoryBound(to: UInt8.self)
+            )
         }
     }
 }
