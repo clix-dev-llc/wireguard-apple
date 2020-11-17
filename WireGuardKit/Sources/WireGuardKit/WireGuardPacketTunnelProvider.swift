@@ -316,3 +316,184 @@ public enum PacketTunnelLogLevel: Int32 {
     case info = 1
     case error = 2
 }
+
+enum WireGuardAdapterError: Error {
+    /// Failure to locate socket descriptor.
+    case cannotLocateSocketDescriptor
+
+    /// Failure to perform an operation in such state
+    case invalidState
+
+    /// Failure to resolve endpoints
+    case dnsResolution([(Endpoint, Error)])
+}
+
+protocol WireGuardAdapterDelegate: class {
+    func wireguardAdapter(_ adapter: WireGuardAdapter, configureTunnelWithNetworkSettings networkSettings: NETunnelNetworkSettings)
+}
+
+class WireGuardAdapter {
+    /// Adapter delegate
+    private weak var delegate: WireGuardAdapterDelegate?
+
+    /// Network routes monitor
+    private var networkMonitor: NWPathMonitor?
+
+    /// A tunnel device source socket file descriptor
+    private let tunnelFileDescriptor: Int32
+
+    /// A wireguard internal handle returned by `wgTurnOn` that's used to associate the calls
+    /// with the specific WireGuard tunnel.
+    private var wireguardHandle: Int32?
+
+    /// A private queue used to synchronize access to `WireGuardAdapter` members
+    private let workQueue = DispatchQueue(label: "WireGuardAdapterQueue")
+
+    /// A logging function used for passing log entries
+    private var logHandler: ((PacketTunnelLogLevel, String) -> Void)?
+
+    /// Flag that tells if the adapter has already started
+    private var isStarted = false
+
+    // MARK: - Initialization
+
+    /// A designated initializer
+    class func fromPacketFlow(_ packetFlow: NEPacketTunnelFlow) throws -> WireGuardAdapter {
+        if let fd = packetFlow.value(forKeyPath: "socket.fileDescriptor") as? Int32 {
+            return WireGuardAdapter(tunnelFileDescriptor: fd)
+        } else {
+            throw WireGuardAdapterError.cannotLocateSocketDescriptor
+        }
+    }
+
+    /// Private initializer
+    private init(tunnelFileDescriptor: Int32) {
+        self.tunnelFileDescriptor = tunnelFileDescriptor
+    }
+
+    deinit {
+        // Force reset logger
+        wgSetLogger(nil, nil)
+
+        // Cancel network monitor
+        networkMonitor?.cancel()
+    }
+
+    func setDelegate(_ delegate: WireGuardAdapterDelegate) {
+        workQueue.async {
+            self.delegate = delegate
+        }
+    }
+
+    func setLogHandler(_ logHandler: @escaping (PacketTunnelLogLevel, String) -> Void) {
+        workQueue.async {
+            self.logHandler = logHandler
+        }
+
+        let context = Unmanaged.passUnretained(self).toOpaque()
+        wgSetLogger(context) { (context, logLevel, message) in
+            guard let context = context, let message = message else { return }
+
+            let unretainedSelf = Unmanaged<WireGuardAdapter>.fromOpaque(context)
+                .takeUnretainedValue()
+
+            let swiftString = String(cString: message).trimmingCharacters(in: .newlines)
+            let tunnelLogLevel = PacketTunnelLogLevel(rawValue: logLevel) ?? .debug
+
+            unretainedSelf.handleLogLine(level: tunnelLogLevel, message: swiftString)
+        }
+    }
+
+    func unsetLogHandler() {
+        workQueue.async {
+            self.logHandler = nil
+        }
+        wgSetLogger(nil, nil)
+    }
+
+    func start(configuration: TunnelConfiguration, completionHandler: @escaping (WireGuardAdapterError?) -> Void) {
+        workQueue.async {
+            guard !self.isStarted else {
+                completionHandler(.invalidState)
+                return
+            }
+
+            #if os(macOS)
+            wgEnableRoaming(true)
+            #endif
+
+            let networkMonitor = NWPathMonitor()
+            networkMonitor.pathUpdateHandler = { [weak self] path in
+                self?.didReceivePathUpdate(path: path)
+            }
+
+            networkMonitor.start(queue: self.workQueue)
+            self.networkMonitor = networkMonitor
+
+            // Resolve hostnames
+            let endpoints = configuration.peers.map { $0.endpoint }
+            var resolutionResults = [Result<Endpoint?, Error>]()
+
+            for endpoint in endpoints {
+                // Resolve hostnames
+                if let endpoint = endpoint, case .name = endpoint.host {
+                    do {
+                        let resolvedEndpoint = try DNSResolver.resolveSync(endpoint: endpoint)
+                        resolutionResults.append(.success(resolvedEndpoint))
+                    } catch {
+                        resolutionResults.append(.failure(error))
+                    }
+                } else {
+                    resolutionResults.append(.success(endpoint))
+                }
+            }
+
+
+
+            completionHandler(nil)
+        }
+    }
+
+    func stop(completionHandler: @escaping (WireGuardAdapterError?) -> Void) {
+        workQueue.async {
+            guard self.isStarted else {
+                completionHandler(.invalidState)
+                return
+            }
+
+            if let handle = self.wireguardHandle {
+                wgTurnOff(handle)
+                self.wireguardHandle = nil
+            }
+
+            completionHandler(nil)
+
+            #if os(macOS)
+            // HACK: This is a filthy hack to work around Apple bug 32073323 (dup'd by us as 47526107).
+            // Remove it when they finally fix this upstream and the fix has been rolled out to
+            // sufficient quantities of users.
+            exit(0)
+            #endif
+        }
+    }
+
+    func setTunnelConfiguration(configuration: TunnelConfiguration, completionHandler: @escaping (WireGuardAdapterError?) -> Void) {
+        workQueue.async {
+            // TODO: implement
+        }
+    }
+
+    private func handleLogLine(level: PacketTunnelLogLevel, message: String) {
+        workQueue.async {
+            self.logHandler?(level, message)
+        }
+    }
+
+    private func didReceivePathUpdate(path: Network.NWPath) {
+        guard self.isStarted else { return }
+
+        if let handle = self.wireguardHandle {
+            wgBumpSockets(handle)
+        }
+    }
+}
