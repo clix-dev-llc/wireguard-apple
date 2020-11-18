@@ -8,59 +8,30 @@ enum DNSResolver {}
 
 extension DNSResolver {
 
-    static func isAllEndpointsAlreadyResolved(endpoints: [Endpoint?]) -> Bool {
-        for endpoint in endpoints {
-            guard let endpoint = endpoint else { continue }
-            if !endpoint.hasHostAsIPAddress() {
-                return false
+    static func resolveSync(endpoints: [Endpoint?]) -> [Result<Endpoint, DNSResolutionError>?] {
+        let isAllEndpointsAlreadyResolved = endpoints.allSatisfy({ (maybeEndpoint) -> Bool in
+            return maybeEndpoint?.hasHostAsIPAddress() ?? true
+        })
+
+        if isAllEndpointsAlreadyResolved {
+            return endpoints.map { (endpoint) in
+                return endpoint.flatMap { .success($0) }
             }
         }
-        return true
-    }
 
-    static func resolveSync(endpoints: [Endpoint?]) -> [Endpoint?]? {
-        let dispatchGroup = DispatchGroup()
+        return endpoints.concurrentMap { (endpoint) -> Result<Endpoint, DNSResolutionError>? in
+            guard let endpoint = endpoint else { return nil }
 
-        if isAllEndpointsAlreadyResolved(endpoints: endpoints) {
-            return endpoints
-        }
-
-        var resolvedEndpoints: [Endpoint?] = Array(repeating: nil, count: endpoints.count)
-        for (index, endpoint) in endpoints.enumerated() {
-            guard let endpoint = endpoint else { continue }
             if endpoint.hasHostAsIPAddress() {
-                resolvedEndpoints[index] = endpoint
+                return .success(endpoint)
             } else {
-                let workItem = DispatchWorkItem {
-                    resolvedEndpoints[index] = try? DNSResolver.resolveSync(endpoint: endpoint)
-                }
-                DispatchQueue.global(qos: .userInitiated).async(group: dispatchGroup, execute: workItem)
+                return Result { try DNSResolver.resolveSync(endpoint: endpoint) }
+                    .mapError { $0 as! DNSResolutionError }
             }
         }
-
-        dispatchGroup.wait() // TODO: Timeout?
-
-        var hostnamesWithDnsResolutionFailure = [String]()
-        assert(endpoints.count == resolvedEndpoints.count)
-        for tuple in zip(endpoints, resolvedEndpoints) {
-            let endpoint = tuple.0
-            let resolvedEndpoint = tuple.1
-            if let endpoint = endpoint {
-                if resolvedEndpoint == nil {
-                    guard let hostname = endpoint.hostname() else { fatalError() }
-                    hostnamesWithDnsResolutionFailure.append(hostname)
-                }
-            }
-        }
-        if !hostnamesWithDnsResolutionFailure.isEmpty {
-            // FIXME: somehow log that.
-            // wg_log(.error, message: "DNS resolution failed for the following hostnames: \(hostnamesWithDnsResolutionFailure.joined(separator: ", "))")
-            return nil
-        }
-        return resolvedEndpoints
     }
 
-    static func resolveSync(endpoint: Endpoint) throws -> Endpoint {
+    private static func resolveSync(endpoint: Endpoint) throws -> Endpoint {
         guard case .name(let name, _) = endpoint.host else {
             return endpoint
         }
@@ -78,7 +49,7 @@ extension DNSResolver {
 
         let errorCode = getaddrinfo(name, "\(endpoint.port)", &hints, &resultPointer)
         if errorCode != 0 {
-            throw makeGetAddrInfoError(errorCode: errorCode)
+            throw DNSResolutionError(errorCode: errorCode, address: name)
         }
 
         var ipv4Address: IPv4Address?
@@ -139,9 +110,9 @@ extension Endpoint {
             result.flatMap { freeaddrinfo($0) }
         }
 
-        let errorCode = getaddrinfo("\(hostname)", "\(self.port)", &hints, &result)
+        let errorCode = getaddrinfo(hostname, "\(self.port)", &hints, &result)
         if errorCode != 0 {
-            throw makeGetAddrInfoError(errorCode: errorCode)
+            throw DNSResolutionError(errorCode: errorCode, address: hostname)
         }
 
         let addrInfo = result!.pointee
@@ -160,9 +131,34 @@ extension Endpoint {
     }
 }
 
-private func makeGetAddrInfoError(errorCode: Int32) -> NSError {
-    let userInfo = [
-        NSLocalizedDescriptionKey: String(cString: gai_strerror(errorCode))
-    ]
-    return NSError(domain: NSPOSIXErrorDomain, code: Int(errorCode), userInfo: userInfo)
+/// An error type describing DNS resolution error
+public struct DNSResolutionError: LocalizedError {
+    public let errorCode: Int32
+    public let address: String
+
+    init(errorCode: Int32, address: String) {
+        self.errorCode = errorCode
+        self.address = address
+    }
+
+    public var errorDescription: String? {
+        return String(cString: gai_strerror(errorCode))
+    }
+}
+
+
+extension Array {
+    func concurrentMap<U>(_ transform: (Element) -> U) -> [U] {
+        var result = [U?](repeating: nil, count: self.count)
+        let queue = DispatchQueue(label: "ConcurrentMapQueue")
+
+        DispatchQueue.concurrentPerform(iterations: self.count) { (index) in
+            let value = transform(self[index])
+            queue.sync {
+                result[index] = value
+            }
+        }
+
+        return result.map { $0! }
+    }
 }
