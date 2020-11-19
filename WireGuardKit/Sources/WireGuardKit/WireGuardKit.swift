@@ -5,5 +5,5 @@ import Foundation
 import libwg_go
 
 public func getWireGuardVersion() -> String {
-    return String(cString: wgVersion()!)
+    return WireGuardAdapter.version
 }

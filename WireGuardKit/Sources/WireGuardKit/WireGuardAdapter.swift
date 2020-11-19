@@ -76,6 +76,11 @@ class WireGuardAdapter {
     /// Packet tunnel settings generator
     private var settingsGenerator: PacketTunnelSettingsGenerator?
 
+    /// Returns a Wireguard version
+    class var version: String {
+        return String(cString: wgVersion())
+    }
+
     // MARK: - Initialization
 
     /// A designated initializer
