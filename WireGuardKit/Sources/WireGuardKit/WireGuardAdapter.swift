@@ -5,7 +5,7 @@ import Foundation
 import NetworkExtension
 import libwg_go
 
-enum WireGuardAdapterError: Error {
+public enum WireGuardAdapterError: Error {
     /// Failure to locate socket descriptor.
     case cannotLocateSocketDescriptor
 
@@ -25,7 +25,7 @@ enum WireGuardAdapterError: Error {
     case startWireGuardBackend(Int32)
 }
 
-protocol WireGuardAdapterDelegate: class {
+public protocol WireGuardAdapterDelegate: class {
     /// Called when the tunnel is about to reconnect using the new tunnel configuration.
     ///
     /// If you handle that method, you may decide to raise `reasserting` flag of your
@@ -53,7 +53,7 @@ protocol WireGuardAdapterDelegate: class {
     func wireGuardAdapter(_ adapter: WireGuardAdapter, handleLogLine message: String, level: WireGuardLogLevel)
 }
 
-class WireGuardAdapter {
+public class WireGuardAdapter {
     /// Adapter delegate
     private weak var delegate: WireGuardAdapterDelegate?
 
