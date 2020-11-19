@@ -42,7 +42,7 @@ extension DNSResolver {
 
         var hints = addrinfo()
         hints.ai_flags = AI_ALL // We set this to ALL so that we get v4 addresses even on DNS64 networks
-        hints.ai_family = AF_UNSPEC
+        hints.ai_family = PF_UNSPEC
         hints.ai_socktype = SOCK_DGRAM
         hints.ai_protocol = IPPROTO_UDP
 
