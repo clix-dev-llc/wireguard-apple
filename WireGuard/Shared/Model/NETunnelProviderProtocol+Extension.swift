@@ -4,6 +4,14 @@
 import NetworkExtension
 import WireGuardKit
 
+enum PacketTunnelProviderError: String, Error {
+    case savedProtocolConfigurationIsInvalid
+    case dnsResolutionFailure
+    case couldNotStartBackend
+    case couldNotDetermineFileDescriptor
+    case couldNotSetNetworkSettings
+}
+
 extension NETunnelProviderProtocol {
     convenience init?(tunnelConfiguration: TunnelConfiguration, previouslyFrom old: NEVPNProtocol? = nil) {
         self.init()

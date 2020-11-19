@@ -599,7 +599,7 @@ class TunnelContainer: NSObject {
             isAttemptingActivation = true
             let activationAttemptId = UUID().uuidString
             self.activationAttemptId = activationAttemptId
-            try (tunnelProvider.connection as? NETunnelProviderSession)?.startTunnel(options: [WireGuardPacketTunnelProvider.activationAttemptIdentifierOptionsKey: activationAttemptId])
+            try (tunnelProvider.connection as? NETunnelProviderSession)?.startTunnel(options: ["activationAttemptId": activationAttemptId])
             wg_log(.debug, staticMessage: "startActivation: Success")
             activationDelegate?.tunnelActivationAttemptSucceeded(tunnel: self)
         } catch let error {

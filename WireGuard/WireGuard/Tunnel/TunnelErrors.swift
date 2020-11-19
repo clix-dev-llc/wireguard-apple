@@ -65,18 +65,18 @@ enum TunnelsManagerActivationError: WireGuardAppError {
     }
 }
 
-extension WireGuardPacketTunnelProviderError: WireGuardAppError {
+extension PacketTunnelProviderError: WireGuardAppError {
     var alertText: AlertText {
         switch self {
-        case .missingProtocolConfiguration, .loadTunnelConfiguration:
+        case .savedProtocolConfigurationIsInvalid:
             return (tr("alertTunnelActivationFailureTitle"), tr("alertTunnelActivationSavedConfigFailureMessage"))
-        case .dnsResolution:
+        case .dnsResolutionFailure:
             return (tr("alertTunnelDNSFailureTitle"), tr("alertTunnelDNSFailureMessage"))
-        case .startWireGuardBackend:
+        case .couldNotStartBackend:
             return (tr("alertTunnelActivationFailureTitle"), tr("alertTunnelActivationBackendFailureMessage"))
-        case .tunnelDeviceFileDescriptor:
+        case .couldNotDetermineFileDescriptor:
             return (tr("alertTunnelActivationFailureTitle"), tr("alertTunnelActivationFileDescriptorFailureMessage"))
-        case .setNetworkSettings:
+        case .couldNotSetNetworkSettings:
             return (tr("alertTunnelActivationFailureTitle"), tr("alertTunnelActivationSetNetworkSettingsMessage"))
         }
     }
