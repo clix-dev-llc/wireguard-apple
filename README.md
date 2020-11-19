@@ -74,6 +74,10 @@ $ open ./WireGuard/WireGuard.xcodeproj
 4. In Xcode project settings, locate your main bundle app and switch to "Build Phases" tab. 
    Locate the "Link with binary libraries" section and hit "+" to add `WireGuardKit`.
    
+5. iOS only: Unfortunately WireGuardKit does not support Bitcode, so each target that links to it, 
+   cannot use Bitcode either. Locate Bitcode settings under target Build settings -> Enable Bitcode, 
+   change the corresponding value to "No".
+   
 Note that if you ship your app for both iOS and macOS, make sure to repeat the steps 2-4 twice, 
 once per platform.
 
