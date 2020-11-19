@@ -103,6 +103,11 @@ public class WireGuardAdapter {
 
         // Cancel network monitor
         networkMonitor?.cancel()
+
+        // Shutdown the tunnel if WireguardAdapter is dropped
+        if let handle = self.wireguardHandle {
+            wgTurnOff(handle)
+        }
     }
 
     // MARK: - Public methods
