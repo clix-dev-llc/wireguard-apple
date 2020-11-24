@@ -25,104 +25,46 @@ public enum WireGuardAdapterError: Error {
     case startWireGuardBackend(Int32)
 }
 
-public protocol WireGuardAdapterDelegate: class {
-    /// Called when the tunnel is about to reconnect using the new tunnel configuration.
-    ///
-    /// If you handle that method, you may decide to raise `reasserting` flag of your
-    /// `NEPacketTunnelProvider` to notify the main bundle app that the tunnel configuration will
-    /// change.
-    ///
-    /// Handle the `NEVPNStatusDidChange` notification to receive the `.reasserting` VPN status in
-    /// your main bundle app.
-    func wireguardAdapterWillReassert(_ adapter: WireGuardAdapter)
-
-    /// Called when the tunnel finished reconnecting with the new tunnel configuration.
-    ///
-    /// If you handle that method, you may decide to reset `reasserting` flag of your
-    /// `NEPacketTunnelProvider` to notify the main bundle app that the tunnel configuration has
-    /// changed.
-    ///
-    /// Handle the `NEVPNStatusDidChange` notification to receive the new VPN status in your
-    /// main bundle app.
-    func wireguardAdapterDidReassert(_ adapter: WireGuardAdapter)
-
-    /// Called when the tunnel requests to update tunnel network settings.
-    func wireguardAdapter(_ adapter: WireGuardAdapter, configureTunnelWithNetworkSettings networkSettings: NETunnelNetworkSettings, completionHandler: @escaping (Error?) -> Void)
-
-    /// Called when `WireGuardAdapter` logs a line.
-    func wireGuardAdapter(_ adapter: WireGuardAdapter, handleLogLine message: String, level: WireGuardLogLevel)
-}
-
 public class WireGuardAdapter {
-    /// Adapter delegate
-    private weak var delegate: WireGuardAdapterDelegate?
+    public typealias LogHandler = (WireGuardLogLevel, String) -> Void
 
-    /// Network routes monitor
+    /// Network routes monitor.
     private var networkMonitor: NWPathMonitor?
 
-    /// Tunnel device source socket file descriptor
-    private let tunnelFileDescriptor: Int32
+    /// Packet tunnel provider.
+    private weak var packetTunnelProvider: NEPacketTunnelProvider?
+
+    /// Log handler closure.
+    private var logHandler: LogHandler?
 
     /// WireGuard internal handle returned by `wgTurnOn` that's used to associate the calls
     /// with the specific WireGuard tunnel.
     private var wireguardHandle: Int32?
 
-    /// Private queue used to synchronize access to `WireGuardAdapter` members
+    /// Private queue used to synchronize access to `WireGuardAdapter` members.
     private let workQueue = DispatchQueue(label: "WireGuardAdapterWorkQueue")
 
-    /// Flag that tells if the adapter has already started
+    /// Flag that tells if the adapter has already started.
     private var isStarted = false
 
-    /// Packet tunnel settings generator
+    /// Packet tunnel settings generator.
     private var settingsGenerator: PacketTunnelSettingsGenerator?
 
-    /// Returns a Wireguard version
+    /// Tunnel device file descriptor.
+    private var tunnelFileDescriptor: Int32? {
+        return self.packetTunnelProvider?.packetFlow.value(forKeyPath: "socket.fileDescriptor") as? Int32
+    }
+
+    /// Returns a Wireguard version.
     class var version: String {
         return String(cString: wgVersion())
     }
 
-    // MARK: - Initialization
-
-    /// A designated initializer
-    public class func fromPacketFlow(_ packetFlow: NEPacketTunnelFlow) throws -> WireGuardAdapter {
-        if let fd = packetFlow.value(forKeyPath: "socket.fileDescriptor") as? Int32 {
-            return WireGuardAdapter(tunnelFileDescriptor: fd)
-        } else {
-            throw WireGuardAdapterError.cannotLocateSocketDescriptor
-        }
-    }
-
-    /// Private initializer
-    private init(tunnelFileDescriptor: Int32) {
-        self.tunnelFileDescriptor = tunnelFileDescriptor
-    }
-
-    deinit {
-        // Force reset logger
-        wgSetLogger(nil, nil)
-
-        // Cancel network monitor
-        networkMonitor?.cancel()
-
-        // Shutdown the tunnel if WireguardAdapter is dropped
-        if let handle = self.wireguardHandle {
-            wgTurnOff(handle)
-        }
-    }
-
-    // MARK: - Public methods
-
-    /// Set `WireGuardAdapter` delegate
-    /// - Parameter delegate: delegate
-    public func setDelegate(_ delegate: WireGuardAdapterDelegate) {
-        workQueue.async {
-            self.delegate = delegate
-        }
-    }
-
     /// Returns the tunnel device interface name, or nil on error.
     /// - Returns: String.
-    public func getInterfaceName() -> String? {
+    public var interfaceName: String? {
+        guard let tunnelFileDescriptor = self.tunnelFileDescriptor else { return nil }
+
         var buffer = [UInt8](repeating: 0, count: Int(IFNAMSIZ))
 
         return buffer.withUnsafeMutableBufferPointer { (mutableBufferPointer) in
@@ -130,7 +72,7 @@ public class WireGuardAdapter {
 
             var ifnameSize = socklen_t(IFNAMSIZ)
             let result = getsockopt(
-                self.tunnelFileDescriptor,
+                tunnelFileDescriptor,
                 2 /* SYSPROTO_CONTROL */,
                 2 /* UTUN_OPT_IFNAME */,
                 baseAddress,
@@ -144,6 +86,30 @@ public class WireGuardAdapter {
         }
     }
 
+    // MARK: - Initialization
+
+    /// Designated initializer.
+    /// - Parameter packetTunnelProvider: an instance of `NEPacketTunnelProvider`. Internally stored
+    ///   as a weak reference.
+    public init(with packetTunnelProvider: NEPacketTunnelProvider) {
+        self.packetTunnelProvider = packetTunnelProvider
+    }
+
+    deinit {
+        // Force deactivate logger to make sure that no further calls to the instance of this class
+        // can happen after deallocation.
+        deactivateLogHandler()
+
+        // Cancel network monitor
+        networkMonitor?.cancel()
+
+        // Shutdown the tunnel
+        if let handle = self.wireguardHandle {
+            wgTurnOff(handle)
+        }
+    }
+
+    // MARK: - Public methods
 
     /// Returns a runtime configuration from WireGuard.
     /// - Parameter completionHandler: completion handler.
@@ -163,10 +129,24 @@ public class WireGuardAdapter {
         }
     }
 
-    /// Start WireGuard tunnel.
+    /// Set log handler.
+    /// - Parameter logHandler: log handler closure
+    public func setLogHandler(_ logHandler: LogHandler?) {
+        workQueue.async {
+            self.logHandler = logHandler
+        }
+
+        if logHandler == nil {
+            deactivateLogHandler()
+        } else {
+            activateLogHandler()
+        }
+    }
+
+    /// Start the tunnel tunnel.
     /// - Parameters:
-    ///   - tunnelConfiguration: tunnel configuration
-    ///   - completionHandler: completion handler
+    ///   - tunnelConfiguration: tunnel configuration.
+    ///   - completionHandler: completion handler.
     public func start(tunnelConfiguration: TunnelConfiguration, completionHandler: @escaping (WireGuardAdapterError?) -> Void) {
         workQueue.async {
             guard !self.isStarted else {
@@ -174,11 +154,14 @@ public class WireGuardAdapter {
                 return
             }
 
+            guard let tunnelFileDescriptor = self.tunnelFileDescriptor else {
+                completionHandler(.cannotLocateSocketDescriptor)
+                return
+            }
+
             #if os(macOS)
             wgEnableRoaming(true)
             #endif
-
-            self.setLogHandler()
 
             let networkMonitor = NWPathMonitor()
             networkMonitor.pathUpdateHandler = { [weak self] path in
@@ -193,7 +176,7 @@ public class WireGuardAdapter {
                     completionHandler(error)
                 } else {
                     var returnError: WireGuardAdapterError?
-                    let handle = wgTurnOn(settingsGenerator!.uapiConfiguration(), self.tunnelFileDescriptor)
+                    let handle = wgTurnOn(settingsGenerator!.uapiConfiguration(), tunnelFileDescriptor)
 
                     if handle >= 0 {
                         self.wireguardHandle = handle
@@ -208,14 +191,17 @@ public class WireGuardAdapter {
         }
     }
 
-    /// Stop WireGuard tunnel.
-    /// - Parameter completionHandler: completion handler
+    /// Stop the tunnel.
+    /// - Parameter completionHandler: completion handler.
     public func stop(completionHandler: @escaping (WireGuardAdapterError?) -> Void) {
         workQueue.async {
             guard self.isStarted else {
                 completionHandler(.invalidState)
                 return
             }
+
+            self.networkMonitor?.cancel()
+            self.networkMonitor = nil
 
             if let handle = self.wireguardHandle {
                 wgTurnOff(handle)
@@ -237,8 +223,8 @@ public class WireGuardAdapter {
 
     /// Update runtime configuration.
     /// - Parameters:
-    ///   - tunnelConfiguration: tunnel configuration
-    ///   - completionHandler: completion handler
+    ///   - tunnelConfiguration: tunnel configuration.
+    ///   - completionHandler: completion handler.
     public func update(tunnelConfiguration: TunnelConfiguration, completionHandler: @escaping (WireGuardAdapterError?) -> Void) {
         workQueue.async {
             guard self.isStarted else {
@@ -249,7 +235,7 @@ public class WireGuardAdapter {
             // Tell the system that the tunnel is going to reconnect using new WireGuard
             // configuration.
             // This will broadcast the `NEVPNStatusDidChange` notification to the GUI process.
-            self.delegate?.wireguardAdapterWillReassert(self)
+            self.packetTunnelProvider?.reasserting = true
 
             self.updateNetworkSettings(tunnelConfiguration: tunnelConfiguration) { (settingsGenerator, error) in
                 if let error = error {
@@ -261,15 +247,15 @@ public class WireGuardAdapter {
                     completionHandler(nil)
                 }
 
-                self.delegate?.wireguardAdapterDidReassert(self)
+                self.packetTunnelProvider?.reasserting = false
             }
         }
     }
 
     // MARK: - Private methods
 
-    /// Setup WireGuard log handler
-    private func setLogHandler() {
+    /// Install WireGuard log handler.
+    private func activateLogHandler() {
         let context = Unmanaged.passUnretained(self).toOpaque()
         wgSetLogger(context) { (context, logLevel, message) in
             guard let context = context, let message = message else { return }
@@ -284,7 +270,12 @@ public class WireGuardAdapter {
         }
     }
 
-    /// Resolve endpoints and update network configuration
+    /// Uninstall WireGuard log handler.
+    private func deactivateLogHandler() {
+        wgSetLogger(nil, nil)
+    }
+
+    /// Resolve endpoints and update network configuration.
     /// - Parameters:
     ///   - tunnelConfiguration: tunnel configuration
     ///   - completionHandler: completion handler
@@ -313,7 +304,7 @@ public class WireGuardAdapter {
         condition.lock()
         defer { condition.unlock() }
 
-        self.delegate?.wireguardAdapter(self, configureTunnelWithNetworkSettings: networkSettings, completionHandler: { (error) in
+        self.packetTunnelProvider?.setTunnelNetworkSettings(networkSettings, completionHandler: { (error) in
             systemError = error
             condition.signal()
         })
@@ -363,7 +354,7 @@ public class WireGuardAdapter {
     ///   - message: message
     private func handleLogLine(level: WireGuardLogLevel, message: String) {
         workQueue.async {
-            self.delegate?.wireGuardAdapter(self, handleLogLine: message, level: level)
+            self.logHandler?(level, message)
         }
     }
 
